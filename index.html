@@ -1,0 +1,1380 @@
+<!-- Graphics Example Code.  index.html - The web page document containing the canvas (drawing surface), that launches your javascript files.  By Garett //-->
+<!DOCTYPE html> <html> <head> <meta charset="UTF-8"/> <link rel="icon" href="assets/fav.ico">
+<script type="text/javascript" src="tinywebgl-ucla.js" ></script>  <!--  Javascript "include" files.  Any code in them gets executed as part of the page loading. //-->
+<script type="text/javascript" src="dependencies.js"   ></script>
+<script type="text/javascript" src="surfaces.js"   ></script>
+<script type="text/javascript"> "use strict"    
+  window.onload = function init()        // ********************* THE ENTRY POINT OF THE WHOLE PROGRAM STARTS HERE ********************* 
+    { window.contexts = {};                                                            // A global variable, "contexts".  Browsers support up to 16 WebGL contexts per page.
+      
+      const scenes  = [ "Tutorial_Animation", "Movement_Controls", "Global_Info_Table" ]; // Register some scenes to the "Canvas_Manager" object -- which WebGL calls
+                                                                                       // upon every time a draw / keyboard / mouse event happens.  
+      
+      if( eval( "typeof " + scenes[0] ) !== "undefined" )
+      { document.getElementById( "canvases" ).appendChild( Object.assign( document.createElement( "canvas" ), { id: "main_canvas", width: 800, height: 600 } ) );
+        contexts[ "main_canvas" ] = new Canvas_Manager( "main_canvas", Color.of( 0,0,0,1 ), scenes );   // Manage the WebGL canvas.  Second parameter sets background color.
+        for( let c in contexts ) contexts[ c ].render();     // Call render() for each WebGL context on this page.  Then render() will re-queue itself for more calls.
+        
+        Code_Manager.display_code( eval( scenes[0] ) );                                  // Display the code for our demo on the page, starting with the first scene in the list.
+        for( let list of [ core_dependencies, all_dependencies ] )
+        document.querySelector( "#class_list" ).rows[2].appendChild( Object.assign( document.createElement( "td" ), { 
+          innerHTML: list.reduce( (acc, x) => acc += "<a href='javascript:void(0);' onclick='Code_Manager.display_code(" + x + ")'>" + x + "</a><br>", "" ) } ) );        
+        document.getElementsByName( "main_demo_link" )[0].innerHTML = "<a href='javascript:void(0);' onclick='Code_Manager.display_code(" + scenes[0] + ")'>" + scenes[0] + "</a><br>";
+        document.querySelector("#code_display").innerHTML = "Below is the code for the demo that's running:<br>&nbsp;<br>" + document.querySelector("#code_display").innerHTML;             
+      }
+      
+      document.querySelector("#edit_button").addEventListener('click', () => {
+        code_panel.style.display=class_list.style.display='none'; new_demo_source_code.style.display='block'; 
+        document.getElementsByName( 'new_demo_code' )[0].value=code_display.dataset.displayed.toString() } )
+      const form = document.forms.namedItem("new_demo_source_code");
+      form.addEventListener('submit', function(event) 
+        { if( document.getElementsByName( "finished" )[0].checked )
+            alert( "Your demo will be submitted.  If approved, you will start being asked for a password to make any further updates to it.  This password "
+                 + "will appear right now, below the submit button, and then (assuming submission worked) it will never appear again.  Write it down." );
+          var xhr = new XMLHttpRequest();
+          xhr.open("POST", "/submit-demo?Unapproved", true);
+          xhr.responseType = "json";
+          xhr.onload = function(event) 
+          { if (xhr.status != 200) { document.querySelector("#submit_result").textContent = "Error " + xhr.status + " when trying to upload."; return }
+            document.querySelector("#submit_result").textContent = this.response.message;
+            // if( this.response.hide_finished_checkbox ) { document.getElementsByName( "finished" )[0].checked = false; expert_panel.style.display = "none" }
+            if( this.response.show_password  ) document.getElementsByName( "password" )[0] .style.display = "inline";
+            if( this.response.show_overwrite ) document.querySelector( "#overwrite_panel" ).style.display = "inline";
+          };
+          xhr.setRequestHeader("Content-Type", "application/json");
+          xhr.send( JSON.stringify( Array.from( form.elements ).reduce( ( accum, elem ) => 
+            { if( elem.value && !( ['checkbox', 'radio'].includes(elem.type) && !elem.checked ) ) accum[elem.name] = elem.value; return accum }, {} ) ) );
+          event.preventDefault();
+        }, false);      
+    }
+
+
+
+
+
+
+// Designed Polygonal objects
+
+class Hemisphere extends Shape
+{ 
+    constructor( rows, columns, texture_range )             
+      { super();            
+        let semi_circle_points = Array( rows ).fill( Vec.of( 0,0,1 ) );
+        semi_circle_points = semi_circle_points.map( (x,i,a) => Mat4.rotation( i/(a.length-1) * Math.PI, Vec.of( 0,1,0 ) ).times( x.to4(1) ).to3() );
+        
+        Surface_Of_Revolution.prototype.insert_transformed_copy_into( this, [ rows, columns, semi_circle_points, [[0,1],[1,0]], 3.14 ] );
+      }
+}
+
+class Circle extends Shape
+{
+    constructor( columns )
+    {
+      super();
+      Regular_2D_Polygon.prototype.insert_transformed_copy_into( this, [ 1, columns ], Mat4.rotation( Math.PI, Vec.of(0, 1, 0) ).times( Mat4.translation([ 0, 0, 1 ]) ) ); 
+    }
+}
+
+class Mushroom extends Surface_Of_Revolution
+{ constructor( rows, columns, texture_range ) 
+    { super( rows, columns, [ ...Vec.cast( [0, 0, 1], [0, .1, 0], [0, .15, -.1], [0, .165, -.1], [-1, .2, -.5] ) ], [[1,1],[0,0]]) ; } }
+
+class Tutorial_Animation extends Scene_Component  // An example of a Scene_Component that our class Canvas_Manager can manage.  Like most, this one draws 3D shapes.
+{ constructor( context )
+    { super( context );
+      var shapes = { 'triangle'        : new Triangle(),                            // At the beginning of our program, instantiate all shapes we plan to use,
+                     'strip'           : new Square(),                              // each with only one instance in the graphics card's memory.
+                     'bad_tetrahedron' : new Tetrahedron( false ),                  // For example we would only create one "cube" blueprint in the GPU, but then 
+                     'tetrahedron'     : new Tetrahedron( true ),                   // re-use it many times per call to display to get multiple cubes in the scene.
+                     'windmill'        : new Windmill( 10 ),
+                     'cube'            : new ( Cube.prototype.make_flat_shaded_version() )(),
+                     'cylinder'        : new ( Capped_Cylinder.prototype.make_flat_shaded_version() )( 20,40,[[ 0,1 ],[ 0,1 ]]), 
+                     'sphere'          : new ( Grid_Sphere.prototype.make_flat_shaded_version() )( 60,60, [[1,0,0],[0,1,0],[0,0,1]] ),
+                     'hemisphere'      : new ( Hemisphere.prototype.make_flat_shaded_version() )( 40,40 ),
+                     'cone'            : new Rounded_Closed_Cone( 20, 20, [[0,1],[0,1]] ),
+                     'torus'           : new ( Torus.prototype.make_flat_shaded_version() )( 40,40 ),
+                     'circle'          : new Circle( 12 ),
+                     'mushroom'        : new ( Mushroom.prototype.make_flat_shaded_version() )( 12,40 ), 
+                     'axis'            : new Axis_Arrows() };
+      this.submit_shapes( context, shapes );
+      
+       // Place the camera, which is stored in a scratchpad for globals.  Secondly, setup the projection:  The matrix that determines how depth is treated.  It projects 3D points onto a plane.
+      Object.assign( context.globals.graphics_state, { camera_transform: Mat4.translation([ 0, 0,-25 ]), projection_transform: Mat4.perspective( Math.PI/4, context.width/context.height, .1, 1000 ) } );
+      
+      // *** Materials: *** Declare new ones as temps when needed; they're just cheap wrappers for some numbers.  1st parameter:  Color (4 floats in RGBA format),
+      // 2nd: Ambient light, 3rd: Diffuse reflectivity, 4th: Specular reflectivity, 5th: Smoothness exponent, 6th: Optional texture object, leave off for un-textured.
+      Object.assign( this, { purplePlastic: context.get_instance( Phong_Model   ).material( Color.of( .9,.5,.9, 1 ), .4, .4, .8, 40 ),
+                             greyPlastic  : context.get_instance( Phong_Model   ).material( Color.of( .5,.5,.5, 1 ), .4, .8, .4, 20 ),   // Smaller exponent means 
+                             blueGlass    : context.get_instance( Phong_Model   ).material( Color.of( .5,1,1,.2 ), .4, 1, .8, 40 ),   // a bigger shiny spot.
+                             fire         : context.get_instance( Funny_Shader  ).material(),
+                             stars        : context.get_instance( Phong_Model   ).material( Color.of( 0,0,1,1 ), .5, .5, .5, 40, context.get_instance( "assets/stars.png" ) ),
+                             regFace      : context.get_instance( Phong_Model   ).material( Color.of( .2,.1,.1,1 ), .5, 1, 1, 40, context.get_instance( "assets/reg-face.png" ) ),   
+                             regBody      : context.get_instance( Phong_Model   ).material( Color.of( .2,.1,.1,1 ), .5, 1, 1, 40, context.get_instance( "assets/reg-body.png" ) ),        
+                             regStripes   : context.get_instance( Phong_Model   ).material( Color.of( .2,.1,.1,1 ), .5, 1, 1, 40, context.get_instance( "assets/reg-stripes.png" ) ),
+                             regHair      : context.get_instance( Phong_Model   ).material( Color.of( .2,.1,.1,1 ), .5, 1, 1, 40, context.get_instance( "assets/reg-hair.png" ) ),
+                             regLegRight  : context.get_instance( Phong_Model   ).material( Color.of( .2,.1,.1,1 ), .5, 1, 1, 40, context.get_instance( "assets/reg-leg-right.png" ) ),
+                             regLegLeft   : context.get_instance( Phong_Model   ).material( Color.of( .2,.1,.1,1 ), .5, 1, 1, 40, context.get_instance( "assets/reg-leg-left.png" ) ),
+                             darkMetal    : context.get_instance( Phong_Model   ).material( Color.of( .1,.1,.2,1 ), .5, 1, 1, 40, context.get_instance( "assets/dark-metal.png" ) ),
+                             metal        : context.get_instance( Phong_Model   ).material( Color.of( .1,.1,.2,1 ), .5, 1, 1, 40, context.get_instance( "assets/metal.png" ) ), 
+                             regArm       : context.get_instance( Phong_Model   ).material( Color.of( .1,.1,.2,1 ), .5, 1, 1, 40, context.get_instance( "assets/reg-arm.png" ) ),  
+                             regGem       : context.get_instance( Phong_Model   ).material( Color.of( .15,.1,.2,1 ), .5, 5, 1, 40, context.get_instance( "assets/reg-jewel.png" ) ),  
+                             goblet       : context.get_instance( Phong_Model   ).material( Color.of( .15,.1,.2,1 ), .5, 1, 1, 40, context.get_instance( "assets/goblet.png" ) ),  
+                             water        : context.get_instance( Phong_Model   ).material( Color.of( .1,.3,.2,.2 ), .5, 1, 1, 40, context.get_instance( "assets/water.png" ) ),
+                             opFur        : context.get_instance( Phong_Model   ).material( Color.of( .2,.1,.1,1 ), .5, 1, 1, 40, context.get_instance( "assets/op-fur.png" ) ),
+                             opMask       : context.get_instance( Phong_Model   ).material( Color.of( .2,.1,.1,1 ), .5, 1, 1, 40, context.get_instance( "assets/op-mask.png" ) ),
+                             yellow       : context.get_instance( Phong_Model   ).material( Color.of( .1,.1,.1,1 ), 1, 1, 1, 40, context.get_instance( "assets/yellow.png" ) ),
+                             fog          : context.get_instance( Phong_Model   ).material(Color.of( .5,.7,.7,.2 ), .4, 1, .8, 40, context.get_instance( "assets/fog.png" ) ),   
+                             laser        : context.get_instance( Phong_Model   ).material(Color.of( .1,.1,.5,.1 ), .5, 1, 1, 40, context.get_instance( "assets/laser.png" ) ),
+                             regEyeRight  : context.get_instance( Phong_Model   ).material(Color.of( .2,.1,.1,1 ), .5, 1, 1, 40, context.get_instance( "assets/reg-eye.png" ) ),
+                             regEyeLeft   : context.get_instance( Phong_Model   ).material(Color.of( .2,.1,.1,1 ), .5, 1, 1, 40, context.get_instance( "assets/reg-eye2.png" ) ),
+                             rgb          : context.get_instance( Phong_Model   ).material(Color.of( .2,.1,.1,1 ), .5, 1, 1, 40, context.get_instance( "assets/rgb.jpg" ) ) });            
+    }
+  display( graphics_state )
+    { 
+      graphics_state.lights = [ new Light( Vec.of( .5,1,0, 0 ).normalized(), Color.of(  .5, .5, .5, 1 ), 100000000 )];
+
+      var model_transform = Mat4.identity();             // We begin with a brand new model_transform every frame.
+      
+      var m = [];
+      m.push( model_transform );
+
+
+
+
+      ///////////////////////////////////////////////////////////////
+      //                                                           //
+      //  Camera                                                   //
+      //                                                           //
+      ///////////////////////////////////////////////////////////////
+
+      // Test vectors
+      // var looker = Mat4.look_at( Vec.of( 105,-5,-10 ), Vec.of(100,-30,-14), Vec.of( 0,1,0 ) ); //eye at up
+
+      // var looker = Mat4.look_at( Vec.of( 0,0,60 ), Vec.of(0,0,0), Vec.of( 0,1,0 ) ); //eye at up
+      // var looker = Mat4.look_at( Vec.of( -100,0,-20 ), Vec.of(0,0,-50), Vec.of( 0,1,0 ) ); //eye at up
+      // graphics_state.camera_transform = looker;
+
+      var pan1 = graphics_state.animation_time - 3000
+      var looker;
+
+      var pan1eye = Vec.of(105,-5,-10).mix( Vec.of(0,0,60), pan1/10000%1 );
+      var pan1at = Vec.of(100,-30,-14).mix( Vec.of(0,0,0), pan1/10000%1  );
+
+      if ( pan1 < 10000 )looker = Mat4.look_at(pan1eye,pan1at,Vec.of(0,1,0)); 
+      else looker = Mat4.look_at( Vec.of( -100,0,-20 ), Vec.of(0,0,-50), Vec.of( 0,1,0 ) ); //eye at up
+
+
+
+
+      graphics_state.camera_transform = looker;
+
+
+
+
+
+
+
+      ///////////////////////////////////////////////////////////////
+      //                                                           //
+      //  Background                                               //
+      //                                                           //
+      ///////////////////////////////////////////////////////////////
+
+      this.shapes.sphere.draw( graphics_state, m[ m.length-1 ].times( Mat4.scale([ 400, 400, 400 ]) ), this.blueGlass) ;
+
+
+      // Intialize position of Central Arena msuhroom
+      m.push( m[m.length-1].times( Mat4.translation([ 0,-70,-46 ]) ) );
+      
+      // Central Arena mushroom
+      m.push( m[m.length-1].times( Mat4.rotation( 1.571, Vec.of( 1,0,0 ) ) ) );
+      this.shapes.mushroom.draw( graphics_state, m[ m.length-1 ].times( Mat4.scale([ 50, 50, 100 ]) ), this.goblet );
+      m.push( m[m.length-1].times( Mat4.translation([ 0,0,-46 ]) ) );
+      this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.scale([ 45, 45, 1 ]) ), this.water) ;
+
+      // Side mushroom
+      m.push( m[ m.length-1 ].times( Mat4.translation([ -30,-80,-10 ]) ) );
+      this.shapes.mushroom.draw( graphics_state, m[ m.length-1 ].times( Mat4.scale([ 30, 30, 100 ]) ), this.goblet );
+      m.push( m[m.length-1].times( Mat4.translation([ 0,0,-46 ]) ) );
+      this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.scale([ 27, 27, 1 ]) ), this.water );
+      m.pop();
+
+      // Starting Platform mushroom
+      m.push( m[ m.length-1 ].times( Mat4.translation([ 80,0,24 ]) ) );
+      this.shapes.mushroom.draw( graphics_state, m[ m.length-1 ].times( Mat4.scale([ 35, 35, 100 ]) ), this.goblet );
+      m.push( m[m.length-1].times( Mat4.translation([ 0,0,-46 ]) ) );
+      this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.scale([ 31, 31, 1 ]) ), this.water );
+      m.pop();
+
+      // Tried using a loop to code the mushrooms, but I couldn't get the positions to be more spread out
+      // or position the water correctly
+
+      m.push( m[ m.length-1 ].times( Mat4.translation([ 0,-78,-89 ]) ) );
+      this.shapes.mushroom.draw( graphics_state, m[ m.length-1 ].times( Mat4.scale([ 35, 35, 100 ]) ), this.goblet );
+      m.push( m[m.length-1].times( Mat4.translation([ 0,0,-46 ]) ) );
+      this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.scale([ 31, 31, 1 ]) ), this.water );
+      m.pop();
+
+      m.push( m[ m.length-1 ].times( Mat4.translation([ -100,-78,45 ]) ) );
+      this.shapes.mushroom.draw( graphics_state, m[ m.length-1 ].times( Mat4.scale([ 35, 35, 100 ]) ), this.goblet );
+      m.push( m[m.length-1].times( Mat4.translation([ 0,0,-46 ]) ) );
+      this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.scale([ 31, 31, 1 ]) ), this.water );
+      m.pop();
+
+      m.push( m[ m.length-1 ].times( Mat4.translation([ 66,-78,-54 ]) ) );
+      this.shapes.mushroom.draw( graphics_state, m[ m.length-1 ].times( Mat4.scale([ 50, 50, 100 ]) ), this.goblet );
+      m.push( m[m.length-1].times( Mat4.translation([ 0,0,-46 ]) ) );
+      this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.scale([ 45, 45, 1 ]) ), this.water );
+      m.pop();
+
+      m.push( m[ m.length-1 ].times( Mat4.translation([ 66,-286,0 ]) ) );
+      this.shapes.mushroom.draw( graphics_state, m[ m.length-1 ].times( Mat4.scale([ 50, 50, 100 ]) ), this.goblet );
+      m.push( m[m.length-1].times( Mat4.translation([ 0,0,-46 ]) ) );
+      this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.scale([ 45, 45, 1 ]) ), this.water );
+      m.pop();
+
+      m.push( m[ m.length-1 ].times( Mat4.translation([ -150,-280,20 ]) ) );
+      this.shapes.mushroom.draw( graphics_state, m[ m.length-1 ].times( Mat4.scale([ 50, 50, 100 ]) ), this.goblet );
+      m.push( m[m.length-1].times( Mat4.translation([ 0,0,-46 ]) ) );
+      this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.scale([ 45, 45, 1 ]) ), this.water );
+      m.pop();
+
+      m.push( m[ m.length-1 ].times( Mat4.translation([ -66,-75,-77 ]) ) );
+      this.shapes.mushroom.draw( graphics_state, m[ m.length-1 ].times( Mat4.scale([ 50, 50, 100 ]) ), this.goblet );
+      m.push( m[m.length-1].times( Mat4.translation([ 0,0,-46 ]) ) );
+      this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.scale([ 45, 45, 1 ]) ), this.water );
+      m.pop();
+      
+      m.pop();
+
+
+
+
+
+
+      ///////////////////////////////////////////////////////////////
+      //                                                           //
+      //  Animation Variables                                      //
+      //                                                           //
+      ///////////////////////////////////////////////////////////////
+
+      // Look up at Central Arena mushroom
+      // Grab onto Central Arena mushroom
+      // Pull himself up onto mushroom
+      // Retract arm
+
+      // base seconds is 5
+
+      var time_SinceLookUp = graphics_state.animation_time - 6000;     
+      var time_SinceRotateArmUp = graphics_state.animation_time - 7000;
+      var time_SinceExtendArm1 = time_SinceRotateArmUp - 1000;      
+      var time_SinceExtendArm2 = time_SinceExtendArm1 - 50;            
+      var time_SinceExtendArm3 = time_SinceExtendArm2 - 50;           
+      var time_SinceExtendArm4 = time_SinceExtendArm3 - 50;      
+      var time_SincePropelUp1 = time_SinceExtendArm4 - 500;            
+      var time_SincePropelUp2 = time_SincePropelUp1 - 100;              
+
+      // Kneel to brace fall
+      // Stand up and see orbed piercer
+      var time_SincePropelUp3 = time_SincePropelUp2 - 100;              
+      var time_SinceSeeOP = time_SincePropelUp3 - 700;                
+
+      // Orbed piercer leaps forward and shoots spikes
+      var time_SinceOPLeapsBody = time_SinceSeeOP - 500;                 
+      var time_SinceOPLeapsLegs = time_SinceSeeOP - 500;                    
+      var time_SinceOPLands = time_SinceOPLeapsBody - 100;                   
+      var time_SinceShootSpikes1 = time_SinceOPLands - 500;
+      var time_SinceShootSpikes2 = time_SinceShootSpikes1 - 50;
+
+      // Reg jumps up and grabs onto orbed piercer
+      var time_SinceRegJumps = time_SinceSeeOP - 800;
+      var time_SinceRegInAir = time_SinceRegJumps - 300;
+
+
+      var time_SinceExtendArm5 = time_SinceRegInAir - 50;
+      var time_SinceExtendArm6 = time_SinceExtendArm5 - 20;
+      var time_SinceExtendArm7 = time_SinceExtendArm6 - 20;
+      var time_SinceExtendArm8 = time_SinceExtendArm7 - 20;
+      var time_SinceExtendArm9 = time_SinceExtendArm8 - 20;
+      var time_SinceExtendArm10 = time_SinceExtendArm9 - 20;
+      var time_SinceExtendArm11 = time_SinceExtendArm10 - 20;
+      var time_SinceExtendArm12 = time_SinceExtendArm11 - 20;
+      var time_SinceExtendArm13 = time_SinceExtendArm12 - 20;
+      var time_SinceExtendArm14 = time_SinceExtendArm13 - 20;
+      var time_SinceExtendArm15 = time_SinceExtendArm14 - 20;
+      var time_SinceExtendArm16 = time_SinceExtendArm15 - 20;
+      var time_SinceExtendArm17 = time_SinceExtendArm16 - 20;
+      var time_SinceExtendArm18 = time_SinceExtendArm17 - 20;
+      var time_SinceReelIn1 = time_SinceExtendArm6 - 30;
+      var time_SinceReelIn2 = time_SinceReelIn1 - 75;
+      var time_SinceReelIn3 = time_SinceReelIn2 - 75;
+      var time_SinceReelIn4 = time_SinceReelIn3 - 75;
+      var time_SinceOPShakes1 = time_SinceReelIn4 - 200;
+      var time_SinceOPShakes2 = time_SinceOPShakes1 - 500;
+      var time_SinceOPShakes3 = time_SinceOPShakes2 - 500;
+      var time_SinceRegJumpsOff1 = time_SinceOPShakes3;
+      var time_SinceRegJumpsOff2 = time_SinceRegJumpsOff1 - 100;
+      var time_SinceRegCharges = time_SinceRegJumpsOff2 - 100;
+      var time_SinceOPTurns = time_SinceRegCharges - 700;
+      var time_SinceRegFires = time_SinceRegCharges - 1000;
+      var time_SinceOPDodge = time_SinceRegFires;
+      var time_SinceOPRun = time_SinceOPDodge - 2000;
+      var time_SinceOPRunLegs = time_SinceOPRun;
+      var time_SinceOPRunLands = time_SinceOPRun - 300;
+      var time_SinceOPGone = time_SinceOPRun - 300;
+
+
+
+
+      // Fix for time_SinceReelIn4 causing problems
+      if ( time_SinceExtendArm5 > 240 ) time_SinceExtendArm5 = -1;
+      if ( time_SinceExtendArm6 > 220 ) time_SinceExtendArm6 = -1;
+      if ( time_SinceExtendArm7 > 200 ) time_SinceExtendArm7 = -1;
+      if ( time_SinceExtendArm8 > 180 ) time_SinceExtendArm8 = -1;
+      if ( time_SinceExtendArm9 > 160 ) time_SinceExtendArm9 = -1;
+      if ( time_SinceExtendArm10 > 100 ) time_SinceExtendArm10 = -1;
+      if ( time_SinceExtendArm11 > 100 ) time_SinceExtendArm11 = -1;
+      if ( time_SinceExtendArm12 > 100 ) time_SinceExtendArm12 = -1;
+      if ( time_SinceExtendArm13 > 80 ) time_SinceExtendArm13 = -1;
+      if ( time_SinceExtendArm14 > 60 ) time_SinceExtendArm14 = -1;
+      if ( time_SinceExtendArm15 > 40 ) time_SinceExtendArm15 = -1;
+      if ( time_SinceExtendArm16 > 30 ) time_SinceExtendArm16 = -1;
+      if ( time_SinceExtendArm17 > 30 ) time_SinceExtendArm17 = -1;
+      if ( time_SinceExtendArm18 > 30 ) time_SinceExtendArm18 = -1;
+
+
+
+
+
+
+      ///////////////////////////////////////////////////////////////
+      //                                                           //
+      //  Orbed Piecer                                             //
+      //                                                           //
+      ///////////////////////////////////////////////////////////////
+
+      // Intitialize starting position
+      m.push( m[m.length-1].times( Mat4.translation([ -38,54,0 ]) ) );
+      m.push( m[m.length-1].times( Mat4.rotation( 1.571, Vec.of( 0,1,0 ) ) ) );
+
+      // OP jumps to center of Central Arena mushroom
+      if ( time_SinceOPLeapsBody > 0 ) m.push( m[m.length-1].times( Mat4.translation([ 0,0,20 ]) ) ); 
+
+      // OP is in center
+      if ( time_SinceOPLands > 0 ) m.push( m[m.length-1].times( Mat4.translation([ 0,0,15 ]) ) ); 
+
+      // OP wants to shake off Reg
+      if ( time_SinceOPShakes1 > 500 ) time_SinceOPShakes1 = -1;
+      if ( time_SinceOPShakes1 > 0 ) m.push( m[m.length-1].times( Mat4.rotation( 0.524, Vec.of( 0,1,0 ) ) ) );
+
+      // OP wants to shake off Reg
+      if ( time_SinceOPShakes2 > 500 ) time_SinceOPShakes2 = -1;
+      if ( time_SinceOPShakes2 > 0 ) m.push( m[m.length-1].times( Mat4.rotation( 0.524, Vec.of( 0,-1,0 ) ) ) );
+
+      // OP wants to shake off Reg
+      if ( time_SinceOPShakes3 > 1000 ) time_SinceOPShakes3 = -1;
+      if ( time_SinceOPShakes3 > 0 ) 
+      {
+          m.push( m[m.length-1].times( Mat4.translation([ 0,1.5,0 ]) ) ); 
+          m.push( m[m.length-1].times( Mat4.rotation( 0.751, Vec.of( -1,0,0 ) ) ) );
+      }
+
+      if ( time_SinceOPTurns > 2300 ) time_SinceOPTurns = -1; 
+      if ( time_SinceOPTurns > 0 ) m.push( m[m.length-1].times( Mat4.rotation( 3.14, Vec.of( 0,-1,0 ) ) ) );
+
+      if ( time_SinceOPDodge > 0 ) m.push( m[m.length-1].times( Mat4.translation([ 15,0,0 ]) ) ); 
+      if ( time_SinceOPTurns == -1 )
+      {
+          m.pop();
+          m.push( m[m.length-1].times( Mat4.translation([ -15,0,0 ]) ) ); 
+      }
+
+      if ( time_SinceOPRun > 0 ) m.push( m[m.length-1].times( Mat4.translation([ 0,0,30 ]) ) ); 
+
+      if ( time_SinceOPRunLands > 0 ) 
+      {
+          m.push( m[m.length-1].times( Mat4.translation([ 0,0,30 ]) ) );
+          m.push( m[m.length-1].times( Mat4.rotation( 0.785, Vec.of( 1,0,0 ) ) ) );
+      }
+
+      if ( time_SinceOPGone > 0 ) m.push( m[m.length-1].times( Mat4.translation([ 0,-100,0 ]) ) );
+
+      // Body
+      this.shapes.sphere.draw( graphics_state, m[ m.length-1 ].times( Mat4.scale([ 7, 7, 10 ]) ), this.opFur );
+      m.push( m[m.length-1].times( Mat4.translation([ 0,0,9 ]) ) );
+      this.shapes.torus.draw( graphics_state, m[ m.length-1 ].times( Mat4.scale([ 3, 3, 2 ]) ), this.opFur);
+
+      // Face
+      m.push( m[m.length-1].times( Mat4.rotation( 1.571, Vec.of( 0,-1,0 ) ) ) );
+      this.shapes.sphere.draw( graphics_state, m.pop().times( Mat4.scale([ 2, 2, 2 ]) ), this.opMask);
+
+      // spikes      
+      let spike = m[ m.length-1 ];
+      let translate = 4;
+      for ( let y = 0; y < 6; y++ )
+      {
+          for ( let x = 0; x < 20; x++ )
+          {
+              spike.post_multiply( Mat4.rotation( 0.174, Vec.of( 0,0,1 ) ) );
+              this.shapes.cone.draw( graphics_state, spike.times( Mat4.translation([ translate,-1,0 ]) ).times( Mat4.scale([ .5, .5, 4 ]) ), this.opFur );
+          }
+
+          spike = m[ m.length-1 ];
+          spike.post_multiply( Mat4.translation([ 0,0,-1 ]) );
+          
+          translate+=.45;
+      }
+
+      let spikeAnimation = m[ m.length-1 ];
+      if ( time_SinceShootSpikes1 > 50 ) time_SinceShootSpikes1 = -1;
+      if ( time_SinceShootSpikes1 > 0 ) 
+      {
+          for ( let x = 0; x < 10; x++ )
+          {
+              spikeAnimation.post_multiply( Mat4.rotation( 0.523, Vec.of( 0,0,1 ) ) );
+              this.shapes.cone.draw( graphics_state, spike.times( Mat4.translation([ x%3,3,20 + x%3 ]) ).times( Mat4.scale([ .5, .5, 4 ]) ), this.opFur );
+          }
+      }
+
+      if ( time_SinceShootSpikes2 > 50 ) time_SinceShootSpikes2 = -1;
+      if ( time_SinceShootSpikes2 > 0 ) 
+      {
+          for ( let x = 0; x < 20; x++ )
+          {
+              spikeAnimation.post_multiply( Mat4.rotation( 0.174, Vec.of( 0,0,1 ) ) );
+              this.shapes.cone.draw( graphics_state, spike.times( Mat4.translation([ x%3,3,50 + x%3 ]) ).times( Mat4.scale([ .5, .5, 4 ]) ), this.opFur );
+          }
+      }
+
+      m.pop();
+
+      if ( time_SinceOPShakes1 > 500 ) time_SinceOPShakes1 = -1;
+      if ( time_SinceOPShakes1 > 0 ) m.pop();
+
+      if ( time_SinceOPShakes2 > 500 ) time_SinceOPShakes2 = -1;
+      if ( time_SinceOPShakes2 > 0 ) m.pop();
+
+      // Right legs
+      m.push( m[m.length-1].times( Mat4.translation([ -4,-5,4 ]) ) );
+      m.push( m[m.length-1].times( Mat4.rotation( 1.571, Vec.of( 1,0,0 ) ) ) );
+
+      // Leaps to center
+      if ( time_SinceOPLeapsLegs > 150 ) time_SinceOPLeapsLegs = -1;
+      if ( time_SinceOPRunLegs > 150 ) time_SinceOPRunLegs = -1;
+      if ( time_SinceOPLeapsLegs > 0 || time_SinceOPRunLegs > 0 ) m.push( m[ m.length-1 ].times( Mat4.rotation( 0.785, Vec.of( -1,0,0 ) ) ) );
+
+      this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.scale([ 2, 2, 6 ]) ), this.opFur );
+      m.pop();
+
+      if ( time_SinceOPLeapsLegs > 150 ) time_SinceOPLeapsLegs = -1;
+      if ( time_SinceOPRunLegs > 150 ) time_SinceOPRunLegs = -1;
+      if ( time_SinceOPLeapsLegs > 0 || time_SinceOPRunLegs > 0 ) m.pop();
+
+      m.push( m[m.length-1].times( Mat4.translation([ -4,-5,-4 ]) ) );
+      m.push( m[m.length-1].times( Mat4.rotation( 1.571, Vec.of( 1,0,0 ) ) ) );
+
+      // Leaps to center
+      if ( time_SinceOPLeapsLegs > 150 ) time_SinceOPLeapsLegs = -1;
+      if ( time_SinceOPRunLegs > 150 ) time_SinceOPRunLegs = -1;
+      if ( time_SinceOPLeapsLegs > 0 || time_SinceOPRunLegs > 0 ) m.push( m[m.length-1].times( Mat4.rotation( 0.785, Vec.of( 1,0,0 ) ) ) );
+
+      // Rears up
+      if ( time_SinceOPShakes3 > 1000 ) time_SinceOPShakes3 = -1;
+      if ( time_SinceOPShakes3 > 0 ) m.push( m[m.length-1].times( Mat4.rotation( 0.785, Vec.of( 1,0,0 ) ) ) );
+
+      this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.scale([ 2, 2, 6 ]) ), this.opFur );
+      m.pop();
+
+      if ( time_SinceOPLeapsLegs > 150 ) time_SinceOPLeapsLegs = -1;
+      if ( time_SinceOPRunLegs > 150 ) time_SinceOPRunLegs = -1;
+      if ( time_SinceOPLeapsLegs > 0 || time_SinceOPRunLegs > 0 ) m.pop();
+
+      if ( time_SinceOPShakes3 > 1000 ) time_SinceOPShakes3 = -1;
+      if ( time_SinceOPShakes3 > 0 ) m.pop();
+
+      // Left legs
+      m.push( m[m.length-1].times( Mat4.translation([ 4,-5,-4 ]) ) );
+      m.push( m[m.length-1].times( Mat4.rotation( 1.571, Vec.of( -1,0,0 ) ) ) );
+
+      // Leaps to center
+      if ( time_SinceOPLeapsLegs > 150 ) time_SinceOPLeapsLegs = -1;
+      if ( time_SinceOPRunLegs > 150 ) time_SinceOPRunLegs = -1;
+      if ( time_SinceOPLeapsLegs > 0 || time_SinceOPRunLegs > 0 ) m.push( m[m.length-1].times( Mat4.rotation( 0.785, Vec.of( 1,0,0 ) ) ) );
+
+      // Rears up
+      if ( time_SinceOPShakes3 > 1000 ) time_SinceOPShakes3 = -1;
+      if ( time_SinceOPShakes3 > 0 ) m.push( m[m.length-1].times( Mat4.rotation( 0.785, Vec.of( 1,0,0 ) ) ) );
+
+      this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.scale([ 2, 2, 6 ]) ), this.opFur );
+      m.pop();
+
+      if ( time_SinceOPLeapsLegs > 150 ) time_SinceOPLeapsLegs = -1;
+      if ( time_SinceOPRunLegs > 150 ) time_SinceOPRunLegs = -1;
+      if ( time_SinceOPLeapsLegs > 0 || time_SinceOPRunLegs > 0 ) m.pop();
+
+      if ( time_SinceOPShakes3 > 1000 ) time_SinceOPShakes3 = -1;
+      if ( time_SinceOPShakes3 > 0 ) m.pop();
+
+      m.push( m[m.length-1].times( Mat4.translation([ 4,-5,4 ]) ) );
+      m.push( m[m.length-1].times( Mat4.rotation( 1.571, Vec.of( 1,0,0 ) ) ) );
+
+      // Leaps to center
+      if ( time_SinceOPLeapsLegs > 150 ) time_SinceOPLeapsLegs = -1;
+      if ( time_SinceOPRunLegs > 150 ) time_SinceOPRunLegs = -1;
+      if ( time_SinceOPLeapsLegs > 0 || time_SinceOPRunLegs > 0 ) m.push( m[m.length-1].times( Mat4.rotation( 0.785, Vec.of( 1,0,0 ) ) ) );
+
+      this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.scale([ 2, 2, 6 ]) ), this.opFur );
+      m.pop();
+
+      if ( time_SinceOPLeapsLegs > 150 ) time_SinceOPLeapsLegs = -1;
+      if ( time_SinceOPRunLegs > 150 ) time_SinceOPRunLegs = -1;
+      if ( time_SinceOPLeapsLegs > 0 || time_SinceOPRunLegs > 0 ) m.pop();
+
+      m.pop();
+      m.pop();
+
+      if ( time_SinceOPLeapsBody > 0 || time_SinceOPRunLegs > 0 ) m.pop();
+
+      if ( time_SinceOPLands > 0 ) m.pop();
+
+      if ( time_SinceOPShakes3 > 1000 ) time_SinceOPShakes3 = -1;
+      if ( time_SinceOPShakes3 > 0 ) 
+      {
+          m.pop();
+          m.pop();
+      }
+
+      if ( time_SinceOPTurns > 2300 ) time_SinceOPTurns = -1; 
+      if ( time_SinceOPTurns > 0 ) m.pop();
+
+      if ( time_SinceOPDodge > 0 ) m.pop(); 
+
+      if ( time_SinceOPRun > 0 ) m.pop();
+
+      if ( time_SinceOPRunLands > 0 ) 
+      {
+          m.pop();
+          m.pop();
+      }
+
+      if ( time_SinceOPGone > 0 ) m.pop();
+
+    
+
+
+
+      ///////////////////////////////////////////////////////////////
+      //                                                           //
+      //  Reg                                                      //
+      //                                                           //
+      ///////////////////////////////////////////////////////////////
+      
+      // Intialize starting position
+      m.push( m[m.length-1].times( Mat4.translation([ 62,31,0 ]) ) );
+      m.push( m[m.length-1].times( Mat4.rotation( 1.571, Vec.of( 0,-1,0 ) ) ) );
+
+      // Reg pulls himself up to Central Arena mushroom
+      // Continue forever - this will be newest position
+      if ( time_SincePropelUp1 > 0 ) m.push( m[m.length-1].times( Mat4.translation([ 0,21,6 ]) ) ); 
+
+      // Reg propels himself a little bove the Central Arena mushroom
+      if ( time_SincePropelUp2 > 0 ) m.push( m[m.length-1].times( Mat4.translation([ 0,3,15 ]) ) ); 
+
+      // Reg lands on the Central Arena Mushroom and then stands up after seeing the orbed piercer
+      if ( time_SincePropelUp3 > 500 ) time_SincePropelUp3 = -1;
+      if ( time_SincePropelUp3 > 0 ) 
+      {
+          m.push( m[m.length-1].times( Mat4.translation([ 0,-1,0 ]) ) ); 
+          m.push( m[m.length-1].times( Mat4.rotation( 0.524, Vec.of( 1,0,0 ) ) ) );
+      }
+
+      // Reg sees the orbed piercer
+      if ( time_SinceSeeOP > 500 ) time_SinceSeeOP = 0;
+      if ( time_SinceSeeOP > 0 ) 
+      {
+          // Exclamation mark
+          m.push( m[m.length-1].times( Mat4.translation([ 0,15,0 ]) ) ); 
+          m.push( m[m.length-1].times( Mat4.rotation( 1.571, Vec.of( 1,0,0 ) ) ) );
+          this.shapes.cone.draw( graphics_state, m[m.length-1].times( Mat4.scale([ 2,2,3 ]) ), this.yellow );
+          m.push( m[m.length-1].times( Mat4.translation([ 0,0,-3 ]) ) ); 
+          m.push( m[m.length-1].times( Mat4.rotation( 1.571, Vec.of( -1,0,0 ) ) ) );
+          this.shapes.hemisphere.draw( graphics_state, m.pop().times( Mat4.scale([ 2,2,2 ]) ), this.yellow );
+          m.pop();
+          m.push( m[m.length-1].times( Mat4.translation([ 0,0,5 ]) ) ); 
+          this.shapes.sphere.draw( graphics_state, m.pop().times ( Mat4.scale([ 1,1,1 ]) ), this.yellow );
+          m.pop();
+          m.pop();
+      }
+
+      // Reg leaps to avoid spikes
+      if ( time_SinceRegJumps > 300 ) time_SinceRegJumps = -1
+      if ( time_SinceRegJumps > 0 )
+      {
+          m.push( m[m.length-1].times( Mat4.translation([ 0,-2,0 ]) ) ); 
+          m.push( m[m.length-1].times( Mat4.rotation( 0.524, Vec.of( 1,0,0 ) ) ) );
+      }
+
+      // Reg is in the air
+      if ( time_SinceRegInAir > 0 ) m.push( m[m.length-1].times( Mat4.translation([ 0,20,0 ]) ) ); 
+
+      // Reg is pulling himself in to OP
+      if ( time_SinceReelIn1 > 0 ) 
+      {
+          m.push( m[m.length-1].times( Mat4.translation([ 0,3,0 ]) ) );
+          m.push( m[m.length-1].times( Mat4.rotation( 1.2 + 3.14, Vec.of( -1,0,0 ) ) ) );
+          m.push( m[m.length-1].times( Mat4.rotation( 0.131, Vec.of( 0,0,-1 ) ) ) );
+          if ( time_SinceReelIn3 > 0 ) m.pop();
+      }
+
+      if ( time_SinceReelIn2 > 0 ) 
+        m.push( m[m.length-1].times( Mat4.translation([ 0,6,0 ]) ) );
+
+      if ( time_SinceReelIn3 > 0 )
+      {
+          m.push( m[m.length-1].times( Mat4.translation([ 0,15,0 ]) ) );
+          m.push( m[m.length-1].times( Mat4.rotation( 1.571, Vec.of( 0,0,-1 ) ) ) );
+      } 
+
+      if ( time_SinceReelIn4 > 0 )
+      {
+          m.pop();
+          m.push( m[m.length-1].times( Mat4.translation([ 0,27,0 ]) ) );
+          m.push( m[m.length-1].times( Mat4.rotation( 3.14, Vec.of( 0,0,-1 ) ) ) );
+          m.push( m[m.length-1].times( Mat4.rotation( 0.262, Vec.of( -1,0,0 ) ) ) );
+          m.push( m[m.length-1].times( Mat4.translation([ 0,-1,-5 ]) ) );
+      }
+
+      // OP wants to shake off Reg
+      if ( time_SinceOPShakes1 > 500 ) time_SinceOPShakes1 = -1;
+      if ( time_SinceOPShakes1 > 0 ) m.push( m[m.length-1].times( Mat4.rotation( 0.262, Vec.of( 0,-1,0 ) ) ) );
+
+      // OP wants to shake off Reg
+      if ( time_SinceOPShakes2 > 500 ) time_SinceOPShakes2 = -1;
+      if ( time_SinceOPShakes2 > 0 ) m.push( m[m.length-1].times( Mat4.rotation( 0.262, Vec.of( 0,1,0 ) ) ) );
+
+      //if ( time_SinceRegJumpsOff1 > 100) time_SinceRegJumpsOff1 = -1;
+      if ( time_SinceRegJumpsOff1 > 0 )
+      {
+          m.push( m[ m.length-1 ].times( Mat4.rotation( 0.751+0.2, Vec.of( -1,0,0 ) ) ) ); 
+          m.push( m[m.length-1].times( Mat4.translation([ 0,5,-20 ]) ) );
+      }
+
+      if ( time_SinceRegJumpsOff2 > 0 ) m.push( m[m.length-1].times( Mat4.translation([ 0,-13.5,-10 ]) ) );
+
+
+
+      m.push( m[m.length-1].times( Mat4.scale([ 2, 3, 1 ]) ) );
+      
+      // Body
+      this.shapes.cube.draw( graphics_state, m.pop(), this.regBody); 
+      m.push( m[m.length-1].times( Mat4.translation([ -1.55,-1,0 ]) ) );
+      m.push( m[m.length-1].times( Mat4.scale([ .5, .25, 1.05 ]) ) );
+      
+      // Right stripes
+      this.shapes.cube.draw( graphics_state, m[m.length-1], this.regStripes ); 
+      this.shapes.cube.draw( graphics_state, m.pop().times( Mat4.translation([ 0,5,0 ]) ), this.regStripes );
+      m.pop();
+
+      // Left stripes
+      m.push( m[m.length-1].times( Mat4.translation([ 1.55,-1,0 ]) ) );
+      m.push( m[m.length-1].times( Mat4.scale([ .5, .25, 1.05 ]) ) );
+      this.shapes.cube.draw( graphics_state, m[m.length-1], this.regStripes );
+      this.shapes.cube.draw( graphics_state, m.pop().times( Mat4.translation([ 0,5,0 ]) ), this.regStripes );
+      m.pop();
+
+      // Belt
+      m.push( m[m.length-1].times( Mat4.rotation( 1.571, Vec.of( 1,0,0 ) ) ) );
+      m.push( m[m.length-1].times( Mat4.scale([ 2.5,1.75,.5 ]) ) );
+      this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.translation([ 0,0,6 ]) ), this.regStripes );
+      m.pop();
+
+      // Right leg
+      m.push( m[m.length-1].times( Mat4.translation([ -1.5,-3,0 ]) ) );
+      m.push( m[m.length-1].times( Mat4.rotation( 1.571, Vec.of( 1,0,0 ) ) ) );
+
+      // Kneeling to brace fall (upper leg)
+      if ( time_SincePropelUp3 > 500 ) time_SincePropelUp3 = 0;
+      if ( time_SincePropelUp3 > 0 ) m.push( m[m.length-1].times( Mat4.rotation( 1.048, Vec.of( -1,0,0 ) ) ) );
+
+      // Reg leaps to avoid spikes (upper leg)
+      if ( time_SinceRegJumps > 300) time_SinceRegJumps = -1
+      if ( time_SinceRegJumps > 0 ) m.push( m[m.length-1].times( Mat4.rotation( 1.571, Vec.of( -1,0,0 ) ) ) );
+
+      // Reg grabs onto OP
+      if ( time_SinceReelIn4 > 0 ) m.push( m[ m.length-1 ].times( Mat4.rotation( 1.571, Vec.of( -1,0,0 ) ) ) );
+      if ( time_SinceRegJumpsOff2 > 0 ) m.pop();
+
+      m.push( m[m.length-1].times( Mat4.translation([ 0,0,1.5 ]) ) );
+      this.shapes.cylinder.draw( graphics_state, m[ m.length-1 ].times( Mat4.scale([ 1.5,1.5,3 ]) ), this.regLegLeft );
+      m.push( m[m.length-1].times( Mat4.translation([ 0,0,1.5 ]) ) );
+      // Put lower leg rotation here
+
+      // Kneeling to brace fall (lower leg)
+      if ( time_SincePropelUp3 > 500 ) time_SincePropelUp3 = -1;
+      if ( time_SincePropelUp3 > 0 ) m.push( m[m.length-1].times( Mat4.rotation( 0.524, Vec.of( 1,0,0 ) ) ) );
+
+      // Reg leaps to avoid spikes (lower leg)
+      if ( time_SinceRegJumps > 300) time_SinceRegJumps = -1
+      if ( time_SinceRegJumps > 0 ) m.push( m[m.length-1].times( Mat4.rotation( 1.571, Vec.of( 1,0,0 ) ) ) );
+
+      // Reg grabs onto OP
+      if ( time_SinceReelIn4 > 0 ) m.push( m[ m.length-1 ].times( Mat4.rotation( 1.571, Vec.of( 1,0,0 ) ) ) );
+      if ( time_SinceRegJumpsOff2 > 0 ) m.pop();
+
+      m.push( m[m.length-1].times( Mat4.translation([ 0,0,1.5 ]) ) );
+      this.shapes.cube.draw( graphics_state, m[ m.length-1 ].times( Mat4.scale([ .75,.75,1.5 ]) ), this.darkMetal );
+      m.push( m[m.length-1].times( Mat4.translation([ 0,.25,1.5 ]) ) );
+      m.push( m[m.length-1].times( Mat4.rotation( 1.571, Vec.of( -1,0,0 ) ) ) );
+
+      // Kneeling to brace fall (foot)
+      if ( time_SincePropelUp3 > 500 ) time_SincePropelUp3 = -1;
+      if ( time_SincePropelUp3 > 0 ) m.push( m[m.length-1].times( Mat4.rotation( 0.524, Vec.of( -1,0,0 ) ) ) );
+
+      // Reg leaps to avoid spikes (foot)
+      if ( time_SinceRegJumps > 300) time_SinceRegJumps = -1
+      if ( time_SinceRegJumps > 0 ) m.push( m[m.length-1].times( Mat4.rotation( 0.785, Vec.of( -1,0,0 ) ) ) );
+
+      // Reg grabs onto OP
+      if ( time_SinceReelIn4 > 0 ) m.push( m[ m.length-1 ].times( Mat4.rotation( 0.785, Vec.of( -1,0,0 ) ) ) );
+      if ( time_SinceRegJumpsOff2 > 0 ) m.pop();
+
+      m.push( m[m.length-1].times( Mat4.translation([ 0,0,.75 ]) ) );
+      this.shapes.hemisphere.draw( graphics_state, m.pop().times( Mat4.scale([ 1,1,1 ]) ), this.darkMetal );
+      m.pop();
+      m.pop();
+      m.pop();
+      m.pop();
+      m.pop();
+      m.pop();
+      m.pop();
+
+      if ( time_SincePropelUp3 > 500 ) time_SincePropelUp3 = -1; 
+      if ( time_SincePropelUp3 > 0 ) 
+      {
+          m.pop();
+          m.pop();
+          m.pop();
+      }
+
+      if ( time_SinceRegJumps > 300 ) time_SinceRegJumps = -1; 
+      if ( time_SinceRegJumps > 0 ) 
+      {
+          m.pop();
+          m.pop();
+          m.pop();
+      }
+
+      if ( time_SinceRegJumpsOff2 <= 0 )
+      {
+          if ( time_SinceReelIn4 > 0 )
+          {
+              m.pop();
+              m.pop();
+              m.pop();
+          } 
+      }
+
+      // Left leg
+      m.push( m[m.length-1].times( Mat4.translation([ 1.5,-3,0 ]) ) );
+      m.push( m[m.length-1].times( Mat4.rotation( 1.571, Vec.of( 1,0,0 ) ) ) );
+
+      // Kneeling to brace fall (upper leg)
+      if ( time_SincePropelUp3 > 500 ) time_SincePropelUp3 = -1;
+      if ( time_SincePropelUp3 > 0 ) m.push( m[m.length-1].times( Mat4.rotation( 1.048, Vec.of( -1,0,0 ) ) ) );
+
+      // Reg leaps to avoid spikes (upper leg)
+      if ( time_SinceRegJumps > 300 ) time_SinceRegJumps = -1
+      if ( time_SinceRegJumps > 0 ) m.push( m[m.length-1].times( Mat4.rotation( 1.571, Vec.of( -1,0,0 ) ) ) );
+
+      // Reg grabs onto OP
+      if ( time_SinceReelIn4 > 0 ) m.push( m[ m.length-1 ].times( Mat4.rotation( 1.571, Vec.of( -1,0,0 ) ) ) );
+      if ( time_SinceRegJumpsOff2 > 0 ) m.pop();
+
+      m.push( m[m.length-1].times( Mat4.translation([ 0,0,1.5 ]) ) );
+      this.shapes.cylinder.draw( graphics_state, m[ m.length-1 ].times( Mat4.scale([ 1.5,1.5,3 ]) ), this.regLegRight );
+      m.push( m[m.length-1].times( Mat4.translation([ 0,0,1.5 ]) ) );
+      // Put lower leg rotation here
+
+      // Kneeling to brace fall (lower leg)
+      if ( time_SincePropelUp3 > 500 ) time_SincePropelUp3 = -1;
+      if ( time_SincePropelUp3 > 0 ) m.push( m[ m.length-1 ].times( Mat4.rotation( 0.524, Vec.of( 1,0,0 ) ) ) );
+
+      // Reg leaps to avoid spikes (lower leg)
+      if ( time_SinceRegJumps > 300 ) time_SinceRegJumps = -1
+      if ( time_SinceRegJumps > 0 ) m.push( m[ m.length-1 ].times( Mat4.rotation( 1.571, Vec.of( 1,0,0 ) ) ) );
+
+      // Reg grabs onto OP
+      if ( time_SinceReelIn4 > 0 ) m.push( m[ m.length-1 ].times( Mat4.rotation( 1.571, Vec.of( 1,0,0 ) ) ) );
+      if ( time_SinceRegJumpsOff2 > 0 ) m.pop();
+
+      m.push( m[m.length-1].times( Mat4.translation([ 0,0,1.5 ]) ) );
+      this.shapes.cube.draw( graphics_state, m[ m.length-1 ].times( Mat4.scale([ .75,.75,1.5 ]) ), this.darkMetal );
+      m.push( m[m.length-1].times( Mat4.translation([ 0,.25,1.5 ]) ) );
+      m.push( m[m.length-1].times( Mat4.rotation( 1.571, Vec.of( -1,0,0 ) ) ) );
+
+      // Kneeling to brace fall (foot)
+      if ( time_SincePropelUp3 > 500 ) time_SincePropelUp3 = -1;
+      if ( time_SincePropelUp3 > 0 ) m.push( m[ m.length-1 ].times( Mat4.rotation( 0.524, Vec.of( -1,0,0 ) ) ) );
+
+      // Reg leaps to avoid spikes (foot)
+      if ( time_SinceRegJumps > 300) time_SinceRegJumps = -1
+      if ( time_SinceRegJumps > 0 ) m.push( m[ m.length-1 ].times( Mat4.rotation( 0.785, Vec.of( -1,0,0 ) ) ) );
+
+      // Reg grabs onto OP
+      if ( time_SinceReelIn4 > 0 ) m.push( m[ m.length-1 ].times( Mat4.rotation( 0.785, Vec.of( -1,0,0 ) ) ) );
+      if ( time_SinceRegJumpsOff2 > 0 ) m.pop();
+
+      m.push( m[m.length-1].times( Mat4.translation([ 0,0,.75 ]) ) );
+      this.shapes.hemisphere.draw( graphics_state, m.pop().times( Mat4.scale([ 1,1,1 ]) ), this.darkMetal );
+      m.pop();
+      m.pop();
+      m.pop();
+      m.pop();
+      m.pop();
+      m.pop();
+      m.pop();
+
+      if ( time_SincePropelUp3 > 500 ) time_SincePropelUp3 = -1; 
+      if ( time_SincePropelUp3 > 0 )
+      {
+          m.pop();
+          m.pop();
+          m.pop();
+      }
+
+      if ( time_SinceRegJumps > 300 ) time_SinceRegJumps = -1; 
+      if ( time_SinceRegJumps > 0 ) 
+      {
+          m.pop();
+          m.pop();
+          m.pop();
+      }
+
+      if ( time_SinceRegJumpsOff2 <= 0 )
+      {
+          if ( time_SinceReelIn4 > 0 )
+          {
+              m.pop();
+              m.pop();
+              m.pop();
+          } 
+      }
+      
+
+
+
+      // Head
+      m.push( m[m.length-1].times( Mat4.translation([ 0,5,0 ]) ) );
+
+      // Reg looks up at big platform. will turn head back forward while ascending
+      if ( time_SinceLookUp > 2750 ) time_SinceLookUp = -1;       // continue for 10 seconds
+      if ( time_SinceLookUp > 0 ) m.push( m[m.length-1].times( Mat4.rotation( 0.786, Vec.of( -1,0,0 ) ) ) );
+
+      // Reg is in the air
+      if ( time_SinceRegInAir > 2000 ) time_SinceRegInAir = -1;
+      if ( time_SinceRegInAir > 0 ) m.push( m[m.length-1].times( Mat4.rotation( 0.262, Vec.of( 1,0,0 ) ) ) );
+
+      m.push( m[m.length-1].times( Mat4.rotation( 1.571, Vec.of( 0,1,0 ) ) ) );
+      m.push( m[m.length-1].times( Mat4.rotation( 1.571, Vec.of( 1,0,0 ) ) ) );
+      this.shapes.sphere.draw( graphics_state, m[m.length-1].times( Mat4.scale([ 2,2,2 ]) ), this.regFace );
+      m.pop();
+      m.pop();
+
+      // Helmet
+      m.push( m[m.length-1].times( Mat4.rotation( 0.523, Vec.of( -1,0,-1 ) ) ) );
+      this.shapes.hemisphere.draw( graphics_state, m.pop().times( Mat4.scale([ 2.5,2.5,2.5 ]) ), this.darkMetal );
+      m.push( m[m.length-1].times( Mat4.rotation( 0.523, Vec.of( -1,0,1 ) ) ) );
+      this.shapes.hemisphere.draw( graphics_state, m.pop().times( Mat4.scale([ 2.5,2.5,2.5 ]) ), this.darkMetal );
+      m.push( m[m.length-1].times( Mat4.translation([ -1,1,2 ]) ) );
+      m.push( m[m.length-1].times( Mat4.rotation( 0.523, Vec.of( -1,-1,0 ) ) ) );
+      this.shapes.torus.draw( graphics_state, m.pop().times( Mat4.scale([ .75,.75,.75 ]) ), this.darkMetal );
+      m.push( m[m.length-1].times( Mat4.translation([ 0,0,-.25 ]) ) );
+      this.shapes.sphere.draw( graphics_state, m.pop().times( Mat4.scale([ .75,.75,.75 ]) ), this.regGem );
+      m.pop();
+
+      // Horns
+      m.push( m[m.length-1].times( Mat4.rotation( 0.960, Vec.of( 0,0,1 ) ) ) );
+      m.push( m[m.length-1].times( Mat4.translation([ 0,2.75,0 ]) ) );
+      m.push( m[m.length-1].times( Mat4.rotation( 1.571, Vec.of( -1,0,0 ) ) ) );
+      this.shapes.cone.draw( graphics_state, m.pop().times( Mat4.scale([ .5,.5,.5 ]) ), this.darkMetal );
+      m.pop();
+      m.pop();
+      m.push( m[m.length-1].times( Mat4.rotation( 1.309, Vec.of( 0,0,-1 ) ) ) );
+      m.push( m[m.length-1].times( Mat4.translation([ 0,2.75,0 ]) ) );
+      m.push( m[m.length-1].times( Mat4.rotation( 1.571, Vec.of( -1,0,0 ) ) ) );
+      this.shapes.cone.draw( graphics_state, m.pop().times( Mat4.scale([ .5,.5,.5 ]) ), this.darkMetal );
+      m.pop();
+      m.pop();
+      
+      // Hair
+      m.push( m[m.length-1].times( Mat4.rotation( -.262, Vec.of( 1,0,0 ) ) ) );
+      m.push( m[m.length-1].times( Mat4.translation([ 0,0,2 ]) ) );
+      m.push( m[m.length-1].times( Mat4.rotation( 1.571, Vec.of( 1,0,0 ) ) ) );
+      this.shapes.cone.draw( graphics_state, m.pop().times( Mat4.scale([ 1,.1,1 ]) ), this.regHair );
+      m.pop();
+      m.pop();
+      m.push( m[m.length-1].times( Mat4.rotation( -.262, Vec.of( 1,-2,0 ) ) ) );
+      m.push( m[m.length-1].times( Mat4.translation([ 0,0,2 ]) ) );
+      m.push( m[m.length-1].times( Mat4.rotation( 1.571, Vec.of( 1,0,0 ) ) ) );
+      this.shapes.cone.draw( graphics_state, m.pop().times( Mat4.scale([ .5,.1,.5 ]) ), this.regHair );
+      m.pop();
+      m.pop();
+
+      // Eyes
+      m.push( m[m.length-1].times( Mat4.rotation( -.4, Vec.of( -1,2,0 ) ) ) );
+      m.push( m[m.length-1].times( Mat4.translation([ 0,0,2 ]) ) );
+      this.shapes.circle.draw( graphics_state, m.pop().times( Mat4.scale([ .5,.5,0 ]) ), this.regEyeLeft );
+      m.pop();
+      m.push( m[m.length-1].times( Mat4.rotation( -.4, Vec.of( -1,-2,0 ) ) ) );
+      m.push( m[m.length-1].times( Mat4.translation([ 0,0,2 ]) ) );
+      this.shapes.circle.draw( graphics_state, m.pop().times( Mat4.scale([ .5,.5,0 ]) ), this.regEyeRight );
+      m.pop();
+
+      // Nose
+      m.push( m[m.length-1].times( Mat4.rotation( 0.564, Vec.of( 1,0,0 ) ) ) );
+      m.push( m[m.length-1].times( Mat4.translation([ 0,0,1.9 ]) ) );   
+      m.push( m[m.length-1].times( Mat4.rotation( 0.785, Vec.of( 1,0,0 ) ) ) );
+      this.shapes.cube.draw( graphics_state, m.pop().times( Mat4.scale([ .1,.25,.25 ]) ), this.regBody );
+      m.pop();
+      m.pop();
+
+      m.pop();
+
+      // Do not let Reg looking up affect arms
+      if ( time_SinceLookUp > 5500 ) time_SinceLookUp = -1;   // continue for 10 seconds
+      if ( time_SinceLookUp > 0 ) m.pop();
+
+      if ( time_SinceRegInAir > 2000 ) time_SinceRegInAir = -1;
+      if ( time_SinceRegInAir > 0 ) m.pop();
+
+
+
+
+
+      // Right arm
+      m.push( m[m.length-1].times( Mat4.rotation( 1.571, Vec.of( 1,0,0 ) ) ) );
+
+      // Set rotation location
+      m.push( m[m.length-1].times( Mat4.translation([ -2,0,-3 ]) ) );
+      m.push( m[m.length-1].times( Mat4.rotation( 0.262, Vec.of( 0,-1,0 ) ) ) );
+
+      // Rotate right arm up to Central Arena mushroom
+      if ( time_SinceRotateArmUp > 1650 ) time_SinceRotateArmUp = -1;   // continue for 2
+      if ( time_SinceRotateArmUp > 0 ) 
+      {
+          m.push( m[m.length-1].times( Mat4.rotation( 0.262, Vec.of( 0,1,0 ) ) ) );
+          m.push( m[m.length-1].times( Mat4.rotation( 2.531, Vec.of( -1,0,0 ) ) ) );
+
+          if ( time_SinceExtendArm1 > 0 )
+          {   
+              m.push( m[m.length-1].times( Mat4.translation([ -.5,0,2 ]) ) ); 
+              this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.scale([ .5,.5,3 ]) ), this.regArm);
+              m.push( m[m.length-1].times( Mat4.translation([ 0,0,3 ]) ) );
+
+              if ( time_SinceExtendArm2 > 0 )
+              {
+                  m.push( m[m.length-1].times( Mat4.translation([ -.5,0,2 ]) ) ); 
+                  this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.scale([ .5,.5,3 ]) ), this.regArm);
+                  m.push( m[m.length-1].times( Mat4.translation([ 0,0,3 ]) ) );
+
+                  if ( time_SinceExtendArm3 > 0 )
+                  {
+                      m.push( m[m.length-1].times( Mat4.translation([ -.5,0,2 ]) ) ); 
+                      this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.scale([ .5,.5,3 ]) ), this.regArm);
+                      m.push( m[m.length-1].times( Mat4.translation([ 0,0,3 ]) ) );
+
+                      if ( time_SinceExtendArm4 > 0 )
+                      {
+                          m.push( m[m.length-1].times( Mat4.translation([ -.5,0,2 ]) ) ); 
+                          this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.scale([ .5,.5,3 ]) ), this.regArm);
+                          m.push( m[m.length-1].times( Mat4.translation([ 0,0,3 ]) ) );
+                      }
+                  }
+              }
+          }
+      }
+
+      // Move right arm to grab onto ledge when he propels himself up
+      if ( time_SincePropelUp1 > 200 ) time_SincePropelUp1 = -1;
+      if ( time_SincePropelUp1 > 0 ) m.push( m[m.length-1].times( Mat4.rotation( 0.785, Vec.of( -1,0,0 ) ) ) );
+
+      // Reg is in the air
+      if ( time_SinceRegInAir > 2000 ) time_SinceRegInAir = -1;
+      if ( time_SinceRegInAir > 0 ) 
+      {
+          m.push( m[m.length-1].times( Mat4.rotation( 0.262, Vec.of( 0,1,0 ) ) ) );
+          m.push( m[m.length-1].times( Mat4.rotation( 1.2, Vec.of( -1,0,0 ) ) ) );
+
+          if ( time_SinceReelIn1 > 0 ) 
+          {
+              m.pop();
+              m.push( m[m.length-1].times( Mat4.rotation( 3.14, Vec.of( -1,0,0 ) ) ) );
+          }
+
+          if ( time_SinceReelIn3 > 50 ) time_SinceReelIn3 = -1;
+          if ( time_SinceReelIn3 > 0 ) m.push( m[m.length-1].times( Mat4.rotation( 1.571, Vec.of( 0,-1,0 ) ) ) );
+
+          if ( time_SinceReelIn4 > 50 ) time_SinceExtendArm5 = -1;
+          if ( time_SinceExtendArm5 > 0)
+          {
+              m.push( m[m.length-1].times( Mat4.rotation( 0.131, Vec.of( 0,1,0 ) ) ) );
+
+              if ( time_SinceReelIn1 > 0 ) m.pop();
+
+              m.push( m[m.length-1].times( Mat4.translation([ -.5,0,2 ]) ) ); 
+              this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.scale([ .5,.5,3 ]) ), this.regArm);
+              m.push( m[m.length-1].times( Mat4.translation([ 0,0,3 ]) ) );
+
+              if ( time_SinceExtendArm6 > 0 )
+              {
+                  m.push( m[m.length-1].times( Mat4.translation([ -.5,0,2 ]) ) ); 
+                  this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.scale([ .5,.5,3 ]) ), this.regArm);
+                  m.push( m[m.length-1].times( Mat4.translation([ 0,0,3 ]) ) );
+
+                  if ( time_SinceExtendArm7 > 0 )
+                  {
+                      m.push( m[m.length-1].times( Mat4.translation([ -.5,0,2 ]) ) ); 
+                      this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.scale([ .5,.5,3 ]) ), this.regArm);
+                      m.push( m[m.length-1].times( Mat4.translation([ 0,0,3 ]) ) );
+
+                      if ( time_SinceExtendArm8 > 0 )
+                      {
+                          m.push( m[m.length-1].times( Mat4.translation([ -.5,0,2 ]) ) ); 
+                          this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.scale([ .5,.5,3 ]) ), this.regArm);
+                          m.push( m[m.length-1].times( Mat4.translation([ 0,0,3 ]) ) );
+
+                          if ( time_SinceExtendArm9 > 0 )
+                          { 
+                              m.push( m[m.length-1].times( Mat4.translation([ -.5,0,2 ]) ) ); 
+                              this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.scale([ .5,.5,3 ]) ), this.regArm);
+                              m.push( m[m.length-1].times( Mat4.translation([ 0,0,3 ]) ) );
+
+                              if ( time_SinceExtendArm10 > 0 )
+                              {
+                                  m.push( m[m.length-1].times( Mat4.translation([ -.5,0,2 ]) ) ); 
+                                  this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.scale([ .5,.5,3 ]) ), this.regArm);
+                                  m.push( m[m.length-1].times( Mat4.translation([ 0,0,3 ]) ) );
+
+                                  if ( time_SinceReelIn3 > 50 ) time_SinceExtendArm11 = -1;
+                                  if ( time_SinceExtendArm11 > 0 )
+                                  {
+                                      m.push( m[m.length-1].times( Mat4.translation([ -.5,0,2 ]) ) ); 
+                                      this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.scale([ .5,.5,3 ]) ), this.regArm);
+                                      m.push( m[m.length-1].times( Mat4.translation([ 0,0,3 ]) ) );
+
+                                      if ( time_SinceExtendArm12 > 0 )
+                                      {
+                                          m.push( m[m.length-1].times( Mat4.translation([ -.5,0,2 ]) ) ); 
+                                          this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.scale([ .5,.5,3 ]) ), this.regArm);
+                                          m.push( m[m.length-1].times( Mat4.translation([ 0,0,3 ]) ) );
+
+                                          if ( time_SinceExtendArm13 > 0 )
+                                          {
+                                              m.push( m[m.length-1].times( Mat4.translation([ -.5,0,2 ]) ) ); 
+                                              this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.scale([ .5,.5,3 ]) ), this.regArm);
+                                              m.push( m[m.length-1].times( Mat4.translation([ 0,0,3 ]) ) );
+
+                                              if ( time_SinceExtendArm14 > 0 )
+                                              {
+                                                  m.push( m[m.length-1].times( Mat4.translation([ -.5,0,2 ]) ) ); 
+                                                  this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.scale([ .5,.5,3 ]) ), this.regArm);
+                                                  m.push( m[m.length-1].times( Mat4.translation([ 0,0,3 ]) ) );
+                                                  
+                                                  if ( time_SinceExtendArm15 > 0 )
+                                                  {
+                                                      m.push( m[m.length-1].times( Mat4.translation([ -.5,0,2 ]) ) ); 
+                                                      this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.scale([ .5,.5,3 ]) ), this.regArm);
+                                                      m.push( m[m.length-1].times( Mat4.translation([ 0,0,3 ]) ) );
+                                                      
+                                                      if ( time_SinceReelIn2 > 50) time_SinceExtendArm16 = -1;
+                                                      if ( time_SinceExtendArm16 > 0 )
+                                                      {
+                                                          m.push( m[m.length-1].times( Mat4.translation([ -.5,0,2 ]) ) ); 
+                                                          this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.scale([ .5,.5,3 ]) ), this.regArm);
+                                                          m.push( m[m.length-1].times( Mat4.translation([ 0,0,3 ]) ) );
+                                                          
+
+                                                          if ( time_SinceExtendArm17 > 0 )
+                                                          {
+                                                              m.push( m[m.length-1].times( Mat4.translation([ -.5,0,2 ]) ) ); 
+                                                              this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.scale([ .5,.5,3 ]) ), this.regArm);
+                                                              m.push( m[m.length-1].times( Mat4.translation([ 0,0,3 ]) ) );
+
+                                                              if ( time_SinceReelIn1 > 30 ) time_SinceExtendArm18 = -1;
+                                                              if ( time_SinceExtendArm18 > 0 )
+                                                              {
+                                                                  m.push( m[m.length-1].times( Mat4.translation([ -.5,0,2 ]) ) ); 
+                                                                  this.shapes.cylinder.draw( graphics_state, m.pop().times( Mat4.scale([ .5,.5,3 ]) ), this.regArm);
+                                                                  m.push( m[m.length-1].times( Mat4.translation([ 0,0,3 ]) ) );
+                                                              }
+                                                          }
+                                                      }
+                                                  }
+                                              }
+                                          }
+                                      }
+                                  }
+                              }
+                          }
+                      }
+                  }
+              }
+          }
+      }
+
+      if ( time_SinceReelIn4 > 0 )
+      {
+          m.pop();
+          m.push( m[m.length-1].times( Mat4.rotation( 1.571, Vec.of( -1,0,0 ) ) ) );
+      }
+
+      m.push( m[m.length-1].times( Mat4.translation([ -.5,0,2 ]) ) );
+      this.shapes.cylinder.draw( graphics_state, m[m.length-1].times( Mat4.scale([ .5,.5,3 ]) ), this.regArm);
+
+      m.push( m[m.length-1].times( Mat4.translation([ 0,0,3 ]) ) );
+      this.shapes.cylinder.draw( graphics_state, m[m.length-1].times( Mat4.scale([ .75,.75,3 ]) ), this.darkMetal );
+      m.push( m[m.length-1].times( Mat4.translation([ 0,0,2 ]) ) );
+      this.shapes.sphere.draw( graphics_state, m.pop().times( Mat4.scale([ .75,.75,.75 ]) ), this.metal );
+
+      if ( time_SinceRegCharges > 1000 ) time_SinceRegCharges = -1;
+      if ( time_SinceRegCharges > 0 && time_SinceRegCharges < 500 )
+      {
+          m.push( m[m.length-1].times( Mat4.translation([ 0,0,4 ]) ) );
+          this.shapes.sphere.draw( graphics_state, m.pop().times( Mat4.scale([ 1,1,1 ]) ), this.laser );
+      }
+
+      if ( time_SinceRegCharges > 500 )
+      {
+          m.push( m[m.length-1].times( Mat4.translation([ 0,0,5 ]) ) );
+          this.shapes.sphere.draw( graphics_state, m.pop().times( Mat4.scale([ 2,2,2 ]) ), this.laser );
+      }
+
+      if ( time_SinceRegFires > 2000 ) time_SinceRegFires = -1;
+      if ( time_SinceRegFires > 0 )
+      {
+          m.push( m[m.length-1].times( Mat4.translation([ 0,0,205 ]) ) );
+          m.push( m[m.length-1].times( Mat4.rotation( 1.571, Vec.of( -1,0,0 ) ) ) );
+          this.shapes.hemisphere.draw( graphics_state, m.pop().times( Mat4.scale([ 15,200,15 ]) ), this.laser );
+          m.pop();
+      }
+
+      m.pop();
+      m.pop();
+      m.pop();
+      m.pop();
+      m.pop();
+
+      // Only rotate and extend right arm
+      if ( time_SinceRotateArmUp > 1650 ) time_SinceRotateArmUp = -1;   // continue for 2
+      if ( time_SinceRotateArmUp > 0) 
+      {
+          m.pop();
+          m.pop();
+          if ( time_SinceExtendArm1 > 0 )
+          {
+              m.pop();  
+              if ( time_SinceExtendArm2 > 0 )
+              {
+                  m.pop();
+                  if ( time_SinceExtendArm3 > 0 ) 
+                  {
+                      m.pop();
+                      if ( time_SinceExtendArm4 > 0 ) m.pop();
+                  }
+              }
+          }
+      }
+
+      // Left arm propel up is controlled independently of right arm
+      if ( time_SincePropelUp1 > 200 ) time_SincePropelUp1 = -1;
+      if ( time_SincePropelUp1 > 0 ) m.pop();
+
+      if ( time_SinceRegInAir > 2000 ) time_SinceRegInAir = -1;
+      if ( time_SinceRegInAir > 0 )
+      {
+          m.pop();
+          m.pop();
+
+          if ( time_SinceReelIn3 > 0 ) m.pop();
+
+          if ( time_SinceReelIn4 > 50 ) time_SinceExtendArm5 = -1;
+          if ( time_SinceExtendArm5 > 0 )
+          {
+              if ( time_SinceReelIn1 >= 0 ) m.pop();  
+              m.pop();
+              if ( time_SinceExtendArm6 > 0 )
+              {
+                  m.pop();
+                  if ( time_SinceExtendArm7 > 0 ) 
+                  {
+                      m.pop();
+                      if ( time_SinceExtendArm8 > 0 ) 
+                      {
+                          m.pop();
+                          if ( time_SinceExtendArm9 > 0 ) 
+                          {
+                              m.pop();
+                              if ( time_SinceExtendArm10 > 0 ) 
+                              {
+                                  m.pop();
+                                  if ( time_SinceReelIn3 > 50 ) time_SinceExtendArm11 = -1;
+                                  if ( time_SinceExtendArm11 > 0 ) 
+                                  {
+                                      m.pop();
+                                      if ( time_SinceExtendArm12 > 0 ) 
+                                      {
+                                          m.pop();
+                                          if ( time_SinceExtendArm13 > 0 ) 
+                                          {
+                                              m.pop();
+                                              if ( time_SinceExtendArm14 > 0 ) 
+                                              {
+                                                  m.pop();
+                                                  if ( time_SinceExtendArm15 > 0 ) 
+                                                  {
+                                                      m.pop();
+                                                      if ( time_SinceReelIn2 > 50 ) time_SinceExtendArm16 = -1;
+                                                      if ( time_SinceExtendArm16 > 0 ) 
+                                                      {
+                                                          m.pop();
+                                                          if ( time_SinceExtendArm17 > 0 ) 
+                                                          {
+                                                              m.pop();
+                                                              if ( time_SinceReelIn1 > 30 ) time_SinceExtendArm18 = -1;
+                                                              if ( time_SinceExtendArm18 > 0 ) 
+                                                              {
+                                                                  m.pop();
+                                                              }   
+                                                          }
+                                                      }
+                                                  }
+                                              }
+                                          }
+                                      }
+                                  }
+                              }
+                          }
+                      }
+                  }
+              }
+          }
+      } 
+
+      // Left arm
+      m.push( m[m.length-1].times( Mat4.rotation( 1.571, Vec.of( 1,0,0 ) ) ) );
+      
+      // Set rotation location
+      m.push( m[m.length-1].times( Mat4.translation([ 2,0,-3 ]) ) );
+      m.push( m[m.length-1].times( Mat4.rotation( 0.262, Vec.of( 0,1,0 ) ) ) );
+
+      // Move left arm to grab onto ledge when he propels himself up
+      if ( time_SincePropelUp1 > 200 ) time_SincePropelUp1 = -1;
+      if ( time_SincePropelUp1 > 0 ) m.push( m[m.length-1].times( Mat4.rotation( 0.785, Vec.of( -1,0,0 ) ) ) );
+
+      if ( time_SinceReelIn4 > 0 )
+      {
+          m.pop();
+          m.push( m[m.length-1].times( Mat4.rotation( 1.571, Vec.of( -1,0,0 ) ) ) );
+      }
+
+      if ( time_SinceRegJumpsOff2 > 0 ) m.pop();
+
+      m.push( m[m.length-1].times( Mat4.translation([ .5,0,2 ]) ) );
+
+      this.shapes.cylinder.draw( graphics_state, m[m.length-1].times( Mat4.scale([ .5,.5,3 ]) ), this.regArm );
+      m.push( m[m.length-1].times( Mat4.translation([ 0,0,3 ]) ) );
+      this.shapes.cylinder.draw( graphics_state, m[m.length-1].times( Mat4.scale([ .75,.75,3 ]) ), this.darkMetal );
+      m.push( m[m.length-1].times( Mat4.translation([ 0,0,2 ]) ) );
+      this.shapes.sphere.draw( graphics_state, m.pop().times( Mat4.scale([ .75,.75,.75 ]) ), this.metal );
+      m.pop();
+      m.pop();
+      m.pop();
+
+
+
+      
+      
+
+
+
+/*
+      // *** Lights: *** Values of vector or point lights over time.  Two different lights *per shape* supported by Phong_Shader; more requires changing a number in the vertex 
+      graphics_state.lights = [ new Light( Vec.of(  30,  30,  34, 1 ), Color.of( 0, .4, 0, 1 ), 100000 ),      // shader.  Arguments to construct a Light(): Light source position
+                                new Light( Vec.of( -10, -20, -14, 0 ), Color.of( 1, 1, .3, 1 ), 100    ) ];    // or vector (homogeneous coordinates), color, and size.  
+      
+      model_transform.post_multiply( Mat4.translation([ 0, 5, 0 ]) );
+      this.shapes.triangle       .draw( graphics_state, model_transform, this.stars );
+      
+      model_transform.post_multiply( Mat4.translation([ 0, -2, 0 ]) );
+      this.shapes.strip          .draw( graphics_state, model_transform, this.greyPlastic   );
+      
+      var t = graphics_state.animation_time/1000,   tilt_spin   = Mat4.rotation( 12*t, Vec.of(          .1,          .8,             .1 ) ),
+                                                    funny_orbit = Mat4.rotation(  2*t, Vec.of( Math.cos(t), Math.sin(t), .7*Math.cos(t) ) );
+
+      // Many shapes can share influence of the same pair of lights, but they don't have to.  All the following shapes will use these lights instead of the above ones.
+      graphics_state.lights = [ new Light( tilt_spin.times( Vec.of(  30,  30,  34, 1 ) ), Color.of( 0, .4, 0, 1 ), 100000               ),
+                                new Light( tilt_spin.times( Vec.of( -10, -20, -14, 0 ) ), Color.of( 1, 1, .3, 1 ), 100*Math.cos( t/10 ) ) ];
+                                
+      model_transform.post_multiply( Mat4.translation([ 0, -2, 0 ]) );
+      this.shapes.tetrahedron    .draw( graphics_state, model_transform.times( funny_orbit ), this.purplePlastic );
+      
+      model_transform.post_multiply( Mat4.translation([ 0, -2, 0 ]) );
+      this.shapes.bad_tetrahedron.draw( graphics_state, model_transform.times( funny_orbit ), this.greyPlastic   );
+      
+      model_transform.post_multiply( Mat4.translation([ 0, -2, 0 ]) );
+      this.shapes.windmill       .draw( graphics_state, model_transform.times( tilt_spin ),   this.purplePlastic );
+      model_transform.post_multiply( Mat4.translation([ 0, -2, 0 ]) );
+      this.shapes.windmill       .draw( graphics_state, model_transform,                      this.fire          );
+      model_transform.post_multiply( Mat4.translation([ 0, -2, 0 ]) );
+      this.shapes.windmill       .draw( graphics_state, model_transform,                      this.blueGlass     );   */
+    }
+}
+
+
+
+
+
+
+
+
+</script>
+<style>
+  table { border-collapse: collapse; display:block; overflow-x: auto; }
+  table, th, td { border: 2px solid black; vertical-align: top; white-space: nowrap }
+  th, td { overflow: hidden;  }
+  button { position: relative; background-color: #4C9F50; color: white; padding: 6px; box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2); transition: background-color .3s, transform .3s }
+  button:hover, button:focus { transform: scale(1.2); color:gold }
+  .dropdown { display:inline-block }
+  .dropdown-content { display: none; position: absolute; background-color: #f9f9f9; min-width: 100px; overflow: auto; box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2) }
+  .dropdown-content a { color: black; padding: 4px 4px; display: block }
+  .dropdown a:hover { background-color: #f1f1f1 }
+  .show { display:inline-block }
+</style>
+</head><body>
+<div id="explanation_section"></div>
+<div id="canvases"></div>
+<table id="control_buttons" class="dropdown" style="display:block; width: 70%;  border: 0px; margin: 0 0 50px 0"><tr></tr></table>
+<div id="code_panel" style="font-family: monospace; white-space: pre; margin: 50px 0" >
+  <div id="code_display"  data-displayed="" ></div>
+  <button id="edit_button" style="display:none">Start editing</button> 
+  <table id="class_list" class="dropdown" style="display:block; border: 0px; border-spacing: 10px " >
+    <tr><td colspan="2">Click below to navigate through all classes that are defined. <br>&nbsp;<br>Main demo: <span name="main_demo_link"></span></td></tr>
+    <tr style="text-align:center"><td>tinywebgl-ucla.js</td><td>dependencies.js</td></tr><tr></tr></table>
+</div>
+<form name="new_demo_source_code" style="display:none">  
+  <p style="margin: 50px 0"><i><b>What can I put here?</b></i>  A JavaScript class, with any valid JavaScript inside.  Your code can use classes from this demo, or from ANY demo on the 
+  encyclopedia of code --  the dependencies will automatically be pulled in to run your demo!<br></p>
+  <textarea rows="30" cols="140" name="new_demo_code"></textarea><br>
+  <div id="submit_result" style="margin: 10px 0"></div>
+  <button type="submit" style="margin: 0px 50px 0px 0px">Save as new webpage</button> 
+  <input type="text" name="author"   placeholder="Author name">
+  <input type="text" name="password" placeholder="Password" style="display:none">
+  <span id="overwrite_panel" style="display:none"><label>Overwrite?<input type="checkbox" name="overwrite" autocomplete="off"></label></span>
+  <span id="beginner_panel"><label>Beginner Mode<input type="checkbox" checked onchange="document.querySelector('#expert_panel').style.display='block'; beginner_panel.style.display='none'"></label></span>
+  <div id="expert_panel" style="display:none;"><label><input type="checkbox" name="finished" autocomplete="off">
+    Optional:  This demo is finished; consider it for public listing on the main page.  
+    I believe that this demo is the one true way to minimalistically do what its name says.
+    The code's readability and structure are so good as to maximize how easy it is to memorize it.
+    </label></div>  
+</form>
+</body></html>
