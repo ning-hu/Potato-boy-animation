@@ -52,12 +52,6 @@ When Reg is on the back of OP, it may look awkward that he is rotating in the
 opposite direction. I felt that it would be more realistic if it seemed like 
 OP was moving side to side so hard that Reg was swinging and losing his grip. 
 
-Overall, I realize that my animation is pretty short given the time we had 
-to do this assignment. When I started coding, I didn’t realize that would be
-the case, but having to code in every action (since most of the actions are
-fairly unique from the others) took much longer than I expected, so I had to 
-cut a few ideas I had for the scuffle. 
-
 This was made for my CS174A class at UCLA.
 This project utilizes WebGL with a Javascript wrapper.
 The only file I editted was index.html. 
