@@ -37,12 +37,7 @@ Most of the textures were custom-created by me in Photoshop Elements 8.0.
 I wanted a dark-green/blue foggy background, so my entire scene takes place
 inside a sphere.
 
-Some parts were left a bit messy due to time, especially the second time
-Reg extends his arm. Long after I had already finished coding that segment, I
-realized that it looked a little off because Reg was not in freefall. As a 
-result of not having enough time to redo it, I had to speed it up so that 
-the error would not be as noticeable. However, when slowed down, you can see
-that I added several intermediate positions to make Reg’s transition from 
+I added several intermediate positions to make Reg’s transition from 
 the air to OP’s back more smooth (he turns in midair). This can also be seen 
 in other segments. I added several intermediate motions for when Reg is
 jumping onto the Central Arena mushroom, and I tried to mimic how a person
